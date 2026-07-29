@@ -190,10 +190,13 @@
 
   // ---- Pitch definitions ----
   const PITCHES={
-    fastball:{name:'Fastball', dur:760, move:0.10, curve:6,  color:'#f2b233'},
-    slider:  {name:'Slider',   dur:850, move:0.24, curve:34, color:'#7fd0ff'},
-    curve:   {name:'Curve',    dur:1000,move:0.30, curve:46, color:'#c99bff'},
-    change:  {name:'Changeup', dur:1120,move:0.28, curve:14, color:'#8fe6a0'}
+    // Approximate big-league timing: the pitch accelerates toward the plate,
+    // then the break shows up late. The longer pitches are intentionally easier
+    // to recognize but have more movement.
+    fastball:{name:'Fastball', dur:540, move:0.10, curve:8,  drop:4,  mph:94, color:'#f2b233'},
+    slider:  {name:'Slider',   dur:650, move:0.24, curve:30, drop:11, mph:84, color:'#7fd0ff'},
+    curve:   {name:'Curve',    dur:790, move:0.30, curve:42, drop:26, mph:73, color:'#c99bff'},
+    change:  {name:'Changeup', dur:720, move:0.28, curve:15, drop:15, mph:81, color:'#8fe6a0'}
   };
 
   // ---- Game state ----
@@ -414,9 +417,10 @@
     const loc=locOf(pitch.tx, pitch.ty);
     const pC=0.98;
     const diffMs=Math.abs(progress-pC)*pitch.dur;
+    const window={fastball:36,slider:46,curve:60,change:52}[pitch.type]||46;
     let tScore;
-    if(diffMs<=42) tScore=1.0; else if(diffMs<=98) tScore=0.75;
-    else if(diffMs<=165) tScore=0.5; else if(diffMs<=235) tScore=0.28; else tScore=0;
+    if(diffMs<=window) tScore=1.0; else if(diffMs<=window+52) tScore=0.75;
+    else if(diffMs<=window+112) tScore=0.5; else if(diffMs<=window+182) tScore=0.28; else tScore=0;
     if(tScore===0){ fxCatch(loc.inZone); addStrike(true); return; }   // swing & miss (caught)
     fxContact();                                                       // bat meets ball
     const chase=Math.max(0, loc.dist-0.85);
@@ -465,18 +469,24 @@
   // ================= Pitch flight =================
   function startPitch(type, tx, ty, dir){
     const p=PITCHES[type];
-    pitch={ type, x0:MOUND.x, y0:MOUND.y, tx, ty, dur:p.dur, start:0, curve:p.curve*(dir||(Math.random()<0.5?-1:1)) };
+    pitch={ type, x0:MOUND.x, y0:MOUND.y, tx, ty, dur:p.dur, start:0,
+      curve:p.curve*(dir||(Math.random()<0.5?-1:1)), drop:p.drop };
     swing=null;
   }
   function pitchPos(now){
     let t=(now-pitch.start)/pitch.dur; t=Math.max(0,Math.min(1,t));
-    const ease=t; // linear travel reads cleaner for timing
+    // A pitched ball covers the last third of the trip very quickly. The
+    // smoothstep also gives breaking pitches a readable, late movement.
+    const ease=t*t*(3-2*t);
     let x=pitch.x0+(pitch.tx-pitch.x0)*ease;
     let y=pitch.y0+(pitch.ty-pitch.y0)*ease;
-    // break: horizontal bend that accelerates late
-    x += pitch.curve*Math.pow(t,1.8);
+    // Movement is zero at release and at the mitt: the visible bend happens
+    // late without making the ball miss its intended target on screen.
+    const late=t*t*(1-t);
+    x += pitch.curve*late;
+    y += pitch.drop*late;
     const r=4+9*ease; // perspective growth
-    return {x,y,r,t};
+    return {x,y,r,t,ease};
   }
 
   // batted ball animation — a sequence of segments {x0,y0,x1,y1,dur,arc,bounces,roll,thud}
@@ -642,10 +652,15 @@
     // sky
     let g=ctx.createLinearGradient(0,0,0,WB); g.addColorStop(0,'#0d2740'); g.addColorStop(1,'#22546d');
     ctx.fillStyle=g; ctx.fillRect(0,0,W,WB);
-    // distant bleachers + crowd
+    // distant bleachers + layered crowd
     ctx.fillStyle='#111b21'; ctx.fillRect(0,40,W,WB-40);
-    ctx.fillStyle='rgba(255,255,255,.06)';
-    for(let x=5;x<W;x+=11){ ctx.fillRect(x,46,2,2); ctx.fillRect(x+4,54,2,2); }
+    for(let row=0;row<4;row++){
+      ctx.fillStyle=row%2?'rgba(255,255,255,.055)':'rgba(0,0,0,.16)';
+      ctx.fillRect(0,45+row*15,W,10);
+    }
+    ctx.fillStyle='rgba(255,255,255,.16)';
+    for(let x=5;x<W;x+=11){ ctx.fillRect(x,48+(x%3)*3,2,2); ctx.fillRect(x+4,61+(x%4)*2,2,2); }
+    ctx.fillStyle='rgba(255,255,255,.08)'; ctx.fillRect(0,108,W,3);
     // stadium light towers on top of the wall
     drawLightTower(92); drawLightTower(300);
     // ---- Fenway-style wall: tall Green Monster (left field), lower center & right ----
@@ -680,9 +695,14 @@
     ctx.strokeStyle='#f2c531'; ctx.lineWidth=3;
     ctx.beginPath(); ctx.moveTo(4,WB); ctx.lineTo(4,10); ctx.stroke();      // LF pole by the Monster
     ctx.beginPath(); ctx.moveTo(W-4,WB); ctx.lineTo(W-4,8); ctx.stroke();   // Pesky Pole (RF)
-    // ---- grass with perspective stripes ----
+    // ---- grass with perspective stripes and mowing lines ----
     ctx.fillStyle='#2f7d46'; ctx.fillRect(0,WB,W,H-WB);
     for(let i=0;i<9;i++){ const seg=(H-WB)/9, ty=WB+i*seg; if(i%2===0){ ctx.fillStyle='#2a6f3e'; ctx.fillRect(0,ty,W,seg); } }
+    ctx.save(); ctx.globalAlpha=.13; ctx.strokeStyle='#b8e19a'; ctx.lineWidth=1;
+    for(let x=-260;x<W+260;x+=42){
+      ctx.beginPath(); ctx.moveTo(W/2,WB); ctx.lineTo(x,H); ctx.stroke();
+    }
+    ctx.restore();
     // warning track in front of the wall
     ctx.fillStyle='#a9673c'; ctx.fillRect(0,WB,W,8);
     ctx.fillStyle='rgba(0,0,0,.10)'; ctx.fillRect(0,WB,W,2);
@@ -718,6 +738,11 @@
     ctx.moveTo(PLATE.x-11,PLATE.y-6); ctx.lineTo(PLATE.x+11,PLATE.y-6);
     ctx.lineTo(PLATE.x+11,PLATE.y+3); ctx.lineTo(PLATE.x,PLATE.y+11); ctx.lineTo(PLATE.x-11,PLATE.y+3);
     ctx.closePath(); ctx.fill();
+    // Batter's boxes and the pitcher's landing line make the field read as a
+    // real diamond instead of a flat green surface.
+    ctx.strokeStyle='rgba(243,239,226,.72)'; ctx.lineWidth=1.5;
+    ctx.strokeRect(PLATE.x-31,PLATE.y-30,18,34); ctx.strokeRect(PLATE.x+13,PLATE.y-30,18,34);
+    ctx.beginPath(); ctx.moveTo(MOUND.x-18,MOUND.y+22); ctx.lineTo(MOUND.x+18,MOUND.y+22); ctx.stroke();
   }
   function drawBase(x,y,occ){
     ctx.save(); ctx.translate(x,y); ctx.rotate(Math.PI/4);
@@ -732,10 +757,12 @@
     ctx.save(); ctx.translate(f.x, f.y+wob); ctx.scale(s,s);
     ctx.fillStyle='rgba(0,0,0,.18)'; ctx.beginPath(); ctx.ellipse(0,15,10,3.5,0,0,7); ctx.fill(); // shadow
     ctx.fillStyle='#e7e9e4'; rr(-7,-6,14,20,4); ctx.fill();          // uniform
+    ctx.fillStyle=f.role==='P'?'#c9302a':'#1d5b8a'; rr(-7,3,14,4,1); ctx.fill();
     ctx.fillStyle='#e8c9a0'; ctx.beginPath(); ctx.arc(0,-12,6,0,7); ctx.fill(); // head
     ctx.fillStyle = f.role==='P' ? '#c9302a' : '#1d5b8a';            // cap (pitcher red, fielders blue)
     ctx.beginPath(); ctx.arc(0,-13,6,Math.PI,0); ctx.fill(); ctx.fillRect(-6,-14,12,3);
     ctx.fillStyle='#8a5a2b'; ctx.beginPath(); ctx.arc(8,3,4.2,0,7); ctx.fill(); // glove
+    ctx.strokeStyle='#243c30'; ctx.lineWidth=1.5; ctx.beginPath(); ctx.moveTo(-5,13); ctx.lineTo(-7,20); ctx.moveTo(5,13); ctx.lineTo(7,20); ctx.stroke();
     ctx.restore();
   }
   function drawRunner(x,y){
@@ -757,8 +784,11 @@
   function drawBatterCatcher(){
     // catcher (very bottom, behind plate)
     ctx.save(); ctx.translate(PLATE.x, PLATE.y+34);
+    ctx.fillStyle='rgba(0,0,0,.24)'; ctx.beginPath(); ctx.ellipse(0,8,28,7,0,0,7); ctx.fill();
     ctx.fillStyle='#243c30'; ctx.beginPath(); ctx.ellipse(0,0,26,20,0,Math.PI,0,true); ctx.fill();
-    ctx.beginPath(); ctx.arc(0,-14,9,0,7); ctx.fill();
+    ctx.strokeStyle='#b7b2a0'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(0,-14,10,Math.PI,0); ctx.stroke();
+    ctx.fillStyle='#1a2b23'; ctx.beginPath(); ctx.arc(0,-14,9,0,7); ctx.fill();
+    ctx.fillStyle='#b7834a'; ctx.beginPath(); ctx.arc(18,0,5,0,7); ctx.fill();
     ctx.restore();
     // batter to the side of the plate
     const bx=PLATE.x-46, by=PLATE.y-34;
@@ -829,6 +859,17 @@
     ctx.restore();
   }
 
+  function drawPitchTrail(p){
+    if(!pitch || p.t<=0 || p.t>=1) return;
+    const tail=Math.min(.18,p.t*.7);
+    const oldT=Math.max(0,p.t-tail);
+    const old=pitchPos(pitch.start+oldT*pitch.dur);
+    const grad=ctx.createLinearGradient(old.x,old.y,p.x,p.y);
+    grad.addColorStop(0,'rgba(255,255,255,0)'); grad.addColorStop(1,'rgba(255,255,255,.24)');
+    ctx.strokeStyle=grad; ctx.lineWidth=Math.max(1,p.r*.45); ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(old.x,old.y); ctx.lineTo(p.x,p.y); ctx.stroke();
+  }
+
   function drawEffects(now){
     for(let i=effects.length-1;i>=0;i--){
       const e=effects[i]; const t=(now-e.start)/e.dur;
@@ -887,6 +928,7 @@
     // pitched ball in flight
     if(pitch && (phase==='bat_pitch'||phase==='pitch_fly')){
       const p=pitchPos(now);
+      drawPitchTrail(p);
       drawBall(p.x,p.y,p.r);
       if(p.t>=1){
         if(phase==='bat_pitch'){ setPhase('bat_result'); resolveTake(); }
@@ -1017,7 +1059,7 @@
         modeTag.textContent='Pitching'; msgEl.innerHTML='Pick your pitch. Slower, breaking pitches fool hitters but are harder to control.';
         const grid=document.createElement('div'); grid.className='pitchgrid';
         Object.entries(PITCHES).forEach(([k,p])=>{
-          const desc={fastball:'fast · straight',slider:'quick · sharp break',curve:'slow · big break',change:'slowest · deceptive'}[k];
+          const desc={fastball:'94 mph · late ride',slider:'84 mph · sharp break',curve:'73 mph · big drop',change:'81 mph · fades late'}[k];
           grid.appendChild(btn(p.name+'<small>'+desc+'</small>','',()=>{ selectedType=k; aim={x:ZC.x,y:ZC.y}; setPhase('pitch_aim'); }));
         });
         slot.appendChild(grid);
